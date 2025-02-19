@@ -1,1 +1,1 @@
-# Message-Aware Graph Attention Network for Large-Scale Multi-Robot Path Planning
+# CNN->GRNN->MLP
