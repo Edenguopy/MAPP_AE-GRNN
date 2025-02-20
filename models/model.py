@@ -26,8 +26,10 @@ class AEGRNN(nn.modules):
         convW = [FOV_W]  # convW为一列表，convW[0]即输入层，为FOV宽度
         convH = [FOV_H]
 
-        # ------------------ DCP v1.4  -  with maxpool + non stride in CNN - less feature
-        numChannel = [3] + [32, 32, 64, 64, 128]
+
+        # CNN中各层的通道数，输入为3个通道
+        numChannel = [3, 32, 32, 64, 64, 128]
+        # 步长
         numStride = [1, 1, 1, 1, 1]
 
         dimCompressMLP = 1
@@ -67,6 +69,7 @@ class AEGRNN(nn.modules):
         #                       CNN-特征提取                                 #
         #                                                                   #
         #####################################################################
+        use_vgg = False
         if use_vgg:  # 默认不选择VGG，参数量过大
             self.ConvLayers = self.make_layers(cfg, batch_norm=True)
             self.compressMLP = nn.Sequential(
