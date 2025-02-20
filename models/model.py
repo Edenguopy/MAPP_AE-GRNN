@@ -9,6 +9,8 @@ import torch.nn as nn
 import utils.graph.graphTools as gt  # 图数据处理工具包
 import utils.graph.graphML as gml    # 图机器学习与深度神经网络模块
 from model_weights_initializer import model_weights_init  # 模型参数初始化
+from models.googlenet import GoogleNet
+from models.resnet import *
 
 
 class AEGRNN(nn.modules):
@@ -31,32 +33,25 @@ class AEGRNN(nn.modules):
         numChannel = [3, 32, 32, 64, 64, 128]
         # 步长
         numStride = [1, 1, 1, 1, 1]
-
+        # 紧接CNN特征压缩 MLP为1层
         dimCompressMLP = 1
+        # 特征压缩MLP各层的神经元数量
         numCompressFeatures = [self.config.numInputFeatures]
-
+        # 最大池化窗口 2*2
         nMaxPoolFilterTaps = 2
+        # 最大池化层步长 2
         numMaxPoolStride = 2
-        # # 1 layer origin
+
+
+        """--------GNN配置--------"""
+        # 图神经网络各层的节点信号维度，初始化GNN输入特征维度
         dimNodeSignals = [self.config.numInputFeatures]
-
-        # # 2 layer - upsampling
-        # dimNodeSignals = [256, self.config.numInputFeatures]
-
-        # # 2 layer - down sampling
-        # dimNodeSignals = [64, self.config.numInputFeatures]
-        #
-        # # 2 layer - down sampling -v2
-        # dimNodeSignals = [64, 32]
-        #
-
-
-        ## ------------------ GCN -------------------- ##
-        # dimNodeSignals = [2 ** 7]
-        # nGraphFilterTaps = [self.config.nGraphFilterTaps,self.config.nGraphFilterTaps] # [2]
+        # 图滤波器的抽头数（多项式阶数）
         nGraphFilterTaps = [self.config.nGraphFilterTaps]
+        # 图注意力机制的头数
         nAttentionHeads = [self.config.nAttentionHeads]
-        # --- actionMLP
+
+        # --- actionMLP --- 是否使用Dropout
         if self.config.use_dropout:
             dimActionMLP = 2
             numActionFeatures = [self.config.numInputFeatures, numAction]
@@ -64,13 +59,14 @@ class AEGRNN(nn.modules):
             dimActionMLP = 1
             numActionFeatures = [numAction]
 
-        #####################################################################
-        #                                                                   #
-        #                       CNN-特征提取                                 #
-        #                                                                   #
-        #####################################################################
-        use_vgg = False
-        if use_vgg:  # 默认不选择VGG，参数量过大
+
+
+        """
+        CNN-特征提取
+        """ 
+        VGG = False
+        GoogleNet = False
+        if VGG:  # 默认不选择VGG，参数量过大
             self.ConvLayers = self.make_layers(cfg, batch_norm=True)
             self.compressMLP = nn.Sequential(
                 nn.Linear(512, 4096),
@@ -83,15 +79,10 @@ class AEGRNN(nn.modules):
             )
             numCompressFeatures = [128]
 
-        else:  # 使用ResNet各个版本
-            if self.config.CNN_mode == 'ResNetSlim_withMLP':
-                convl = []
-                convl.append(ResNetSlim(BasicBlock, [1, 1], out_map=False))
-                convl.append(nn.Dropout(0.2))
-                convl.append(nn.Flatten())
-                convl.append(nn.Linear(in_features=1152, out_features=self.config.numInputFeatures, bias=True))
-                self.ConvLayers = nn.Sequential(*convl)
-                numFeatureMap = self.config.numInputFeatures
+        else:  # ResNe和GoogleNet
+            if self.config.CNN_mode == 'GoogleNet':
+                self.ConvLayers = GoogleNet(dropout_rate=0.2)
+                numFeatureMap = 1152  
             elif self.config.CNN_mode == 'ResNetLarge_withMLP':
                 convl = []
                 convl.append(ResNet(BasicBlock, [1, 1, 1], out_map=False))
@@ -100,48 +91,7 @@ class AEGRNN(nn.modules):
                 convl.append(nn.Linear(in_features=1152, out_features=self.config.numInputFeatures, bias=True))
                 self.ConvLayers = nn.Sequential(*convl)
                 numFeatureMap = self.config.numInputFeatures
-            elif self.config.CNN_mode == 'ResNetSlim':
-                convl = []
-                convl.append(ResNetSlim(BasicBlock, [1, 1], out_map=False))
-                convl.append(nn.Dropout(0.2))
-                self.ConvLayers = nn.Sequential(*convl)
-                numFeatureMap = 1152
-            elif self.config.CNN_mode == 'ResNetLarge':
-                convl = []
-                convl.append(ResNet(BasicBlock, [1, 1, 1], out_map=False))
-                convl.append(nn.Dropout(0.2))
-                self.ConvLayers = nn.Sequential(*convl)
-                numFeatureMap = 1152
-            else:
-                convl = []
-                numConv = len(numChannel) - 1
-                nFilterTaps = [3] * numConv
-                nPaddingSzie = [1] * numConv
-                for l in range(numConv):
-                    convl.append(nn.Conv2d(in_channels=numChannel[l], out_channels=numChannel[l + 1],
-                                           kernel_size=nFilterTaps[l], stride=numStride[l], padding=nPaddingSzie[l],
-                                           bias=True))
-                    convl.append(nn.BatchNorm2d(num_features=numChannel[l + 1]))
-                    convl.append(nn.ReLU(inplace=True))
-
-                    # if self.config.use_dropout:
-                    #     convl.append(nn.Dropout(p=0.2))
-
-                    W_tmp = int((convW[l] - nFilterTaps[l] + 2 * nPaddingSzie[l]) / numStride[l]) + 1
-                    H_tmp = int((convH[l] - nFilterTaps[l] + 2 * nPaddingSzie[l]) / numStride[l]) + 1
-                    # Adding maxpooling
-                    if l % 2 == 0:
-                        convl.append(nn.MaxPool2d(kernel_size=2))
-                        W_tmp = int((W_tmp - nMaxPoolFilterTaps) / numMaxPoolStride) + 1
-                        H_tmp = int((H_tmp - nMaxPoolFilterTaps) / numMaxPoolStride) + 1
-                        # http://cs231n.github.io/convolutional-networks/
-                    convW.append(W_tmp)
-                    convH.append(H_tmp)
-
-                self.ConvLayers = nn.Sequential(*convl)
-
-                numFeatureMap = numChannel[-1] * convW[-1] * convH[-1]
-
+            
             #####################################################################
             #                                                                   #
             #                MLP-特征压缩                            #
