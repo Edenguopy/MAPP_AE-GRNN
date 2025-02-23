@@ -1,5 +1,5 @@
 '''
-This file contains codes for ResNet
+ResNet
 '''
 import pdb
 import math
